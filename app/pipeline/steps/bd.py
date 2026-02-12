@@ -46,7 +46,7 @@ class PipelineTempData(Base):
     operation_id = Column(String, ForeignKey("pipeline_operations.operation_id"), nullable=False, index=True)
     step = Column(String, nullable=False)  # MERGE_AUDIO, DIARIZATION и т.д.
     data = Column(JSON, nullable=True)     # хранит промежуточный результат
-
+    status = Column(String, nullable=False, default="PENDING")  # NEW: PENDING/RUNNING/DONE/FAILED
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

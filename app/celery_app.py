@@ -16,4 +16,4 @@ celery_app.conf.update(
     task_reject_on_worker_lost = True
 )
 
-celery_app.autodiscover_tasks(["app.pipeline.shag.tasks"])
+celery_app.autodiscover_tasks(["app.pipeline.steps.pipeline_tasks"])

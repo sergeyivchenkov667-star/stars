@@ -10,10 +10,12 @@ import torch
 # PATHS & PARAMETERS
 # =====================
 
-PATH_TO_AUDIO = Path("/home/sergey/FastAPIProject/app/api/data/audio")
-RESULTS_PATH = Path("/home/sergey/FastAPIProject/app/api/results")
-TMP_PATH = Path("/home/sergey/FastAPIProject/app/api/tmp")
-METRICS_PATH = Path("/home/sergey/FastAPIProject/app/api/metrics")
+BASE_DIR = Path.cwd()  # текущая рабочая директория запуска
+
+PATH_TO_AUDIO = BASE_DIR / "app" / "api" / "data" / "audio"
+RESULTS_PATH = BASE_DIR / "app" / "api" / "results"
+TMP_PATH = BASE_DIR / "app" / "api" / "tmp"
+METRICS_PATH = BASE_DIR / "app" / "api" / "metrics"
 
 CALC_METRICS = True
 RANDOM_SEED = 42
@@ -36,10 +38,8 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # INIT DIRECTORIES
 # =====================
 
-PATH_TO_AUDIO.mkdir(parents=True, exist_ok=True)
-RESULTS_PATH.mkdir(parents=True, exist_ok=True)
-TMP_PATH.mkdir(parents=True, exist_ok=True)
-METRICS_PATH.mkdir(parents=True, exist_ok=True)
+for path in [PATH_TO_AUDIO, RESULTS_PATH, TMP_PATH, METRICS_PATH]:
+    path.mkdir(parents=True, exist_ok=True)
 
 if CALC_METRICS and next(METRICS_PATH.glob("*.xlsx"), None) is None:
     print(f"[WARNING] В директории {METRICS_PATH} нет .xlsx файлов разметки")

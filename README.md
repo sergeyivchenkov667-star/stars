@@ -91,7 +91,7 @@ celery -A app.celery_app worker -Q gpu -c 1 -P solo -n gpu@%h -l info
 
 #### Терминал 3 — FastAPI сервер
 ```bash
-uvicorn app.pipeline.shag.Test_API:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.pipeline.steps.Test_API:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ### 6. Проверка API через Swagger

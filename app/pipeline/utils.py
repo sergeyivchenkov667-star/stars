@@ -1,7 +1,21 @@
 import os
+import shutil
+import logging
 import uuid
 from pathlib import Path
+from datetime import datetime
+from app.pipeline.steps.bd import SessionLocal, PipelineOperation, PipelineTempData
+from sqlalchemy.orm import Session
+from app.pipeline.config import TMP_PATH
 
+
+# ---------------- Logging ----------------
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)s | %(message)s',
+    handlers=[logging.StreamHandler()]
+)
 
 def get_speaker_name(path: str) -> str:
     """Имя файла без пути и расширения."""
@@ -20,12 +34,6 @@ def get_unique_result_path(base_path: Path, operation_id: str) -> Path:
     result_dir = base_path / operation_id
     result_dir.mkdir(parents=True, exist_ok=True)
     return result_dir
-
-
-# app/utils/db_helpers.py
-from datetime import datetime
-from app.pipeline.shag.bd import SessionLocal, PipelineOperation, PipelineTempData
-from sqlalchemy.orm import Session
 
 
 def mark_done(operation_id: str, result_url: str, extra_data: dict | None = None):
@@ -62,14 +70,18 @@ def mark_failed(operation_id: str, extra_data: dict | None = None):
         db.commit()
 
 
-def update_temp_data(db: Session, operation_id: str, step: str, data: dict):
+def update_temp_data(db: Session, operation_id: str, step: str, data: dict = None, status: str = None):
     temp = db.query(PipelineTempData).filter_by(operation_id=operation_id, step=step).first()
     if not temp:
-        temp = PipelineTempData(operation_id=operation_id, step=step, data=data)
+        temp = PipelineTempData(operation_id=operation_id, step=step, data=data or {}, status=status or "PENDING")
         db.add(temp)
     else:
-        temp.data = data
+        if data is not None:
+            temp.data = data
+        if status is not None:
+            temp.status = status
     db.commit()
+    return temp
 
 
 def get_temp_data(db: Session, operation_id: str, step: str):
@@ -105,3 +117,20 @@ def update_progress(operation_id: str, step: str, progress: int):
                 "updated_at": datetime.utcnow()
             })
         db.commit()
+
+
+# ------------------------- Cleanup -------------------------
+def cleanup_temp_if_done(db: Session, operation_id: str):
+    """
+    Проверяет, все ли шаги пайплайна для operation_id DONE,
+    и если да — удаляет временные файлы.
+    """
+    steps = db.query(PipelineTempData).filter_by(operation_id=operation_id).all()
+    if not steps:
+        return
+
+    if all(step.status == "DONE" for step in steps):
+        tmp_path = Path(TMP_PATH) / operation_id
+        if tmp_path.exists():
+            shutil.rmtree(tmp_path)
+            logger.info(f"Temporary files for operation {operation_id} removed")

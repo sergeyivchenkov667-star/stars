@@ -1,3 +1,6 @@
+# ----------------------
+# Импорты из проекта
+# ----------------------
 from fastapi import FastAPI, HTTPException, Body, Path, Query
 from pydantic import BaseModel
 from uuid import uuid4
@@ -5,18 +8,13 @@ from celery.result import AsyncResult
 from datetime import datetime, timezone
 from typing import List, Optional
 from enum import Enum
-
-# ----------------------
-# Импорты из проекта
-# ----------------------
-from app.pipeline.shag.chain_v import run_pipeline_chain
-from app.pipeline.shag.bd import SessionLocal, engine, PipelineOperation, PipelineSegment, Meeting, MeetingMicrophone
+from app.pipeline.steps.pipeline_workflow import run_pipeline_chain
+from app.pipeline.steps.bd import SessionLocal, engine, PipelineOperation, PipelineSegment, Meeting, MeetingMicrophone
 from app.celery_app import celery_app
 from app.pipeline.utils import get_unique_result_path
 from app.pipeline.config import TMP_PATH, PATH_TO_AUDIO
 from fastapi.responses import FileResponse
-from fastapi import HTTPException
-from fastapi import Query
+
 
 # ----------------------
 # FastAPI instance
