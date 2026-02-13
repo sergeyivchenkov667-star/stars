@@ -1,126 +1,225 @@
-from sqlalchemy import Column, String, Integer, DateTime, JSON
+from sqlalchemy import (
+    Column,
+    String,
+    Integer,
+    DateTime,
+    JSON,
+    Index,
+    text,
+    ForeignKey,
+    Numeric,
+    UniqueConstraint,
+    create_engine,
+)
+from sqlalchemy.orm import relationship, sessionmaker, declarative_base
 from sqlalchemy.sql import func
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy import ForeignKey
-from sqlalchemy.orm import relationship
-from sqlalchemy import Numeric
-from sqlalchemy.ext.declarative import declarative_base
+from pydantic_settings import BaseSettings
+
+
+
+class Settings(BaseSettings):
+    database_url_sync: str
+
+    class Config:
+        env_file = ".env"
+
+
+# ============================================================
+# Database
+# ============================================================
 
 DATABASE_URL = "postgresql+psycopg2://postgres:password@localhost:5432/mydb"
 
-
 engine = create_engine(
     DATABASE_URL,
+    pool_size=10,
+    max_overflow=20,
+    pool_timeout=30,
+    pool_recycle=1800,
     pool_pre_ping=True,
-    connect_args={"options": "-c search_path=public"}
+    connect_args={"options": "-c search_path=public"},
 )
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
+SessionLocal = sessionmaker(
+    autocommit=False,
+    autoflush=False,
+    bind=engine,
+)
 
 Base = declarative_base()
 
+# ============================================================
+# Pipeline
+# ============================================================
 
-# class PipelineStatus(str, Enum):
-#     PENDING = "PENDING"
-#     RUNNING = "RUNNING"
-#     FAILED = "FAILED"
-#     DONE = "DONE"
-#
-#
-# class PipelineStep(IntEnum):
-#     MERGE_AUDIO = 0
-#     DIARIZATION = 1
-#     MERGE_INTERVALS = 2
-#     VAD_HUNGARIAN = 3
-#     EXTRACT_SEGMENTS = 4
-#     TRANSCRIPTION = 5
-#     EXPORT = 6
+
+class PipelineOperation(Base):
+    __tablename__ = "pipeline_operations"
+
+    id = Column(Integer, primary_key=True)
+    operation_id = Column(String, unique=True, index=True, nullable=False)
+
+    status = Column(String, nullable=False, default="PENDING")
+    step = Column(String, nullable=True)
+    progress = Column(Integer, nullable=False, default=0)
+
+    result_json_s3_key = Column(String, nullable=True)
+    result_docx_s3_key = Column(String, nullable=True)
+
+    data = Column(JSON, nullable=True)
+    task_id = Column(String, nullable=True)
+
+    created_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    segments = relationship(
+        "PipelineSegment",
+        back_populates="operation",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    temp_data = relationship(
+        "PipelineTempData",
+        back_populates="operation",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class PipelineTempData(Base):
     __tablename__ = "pipeline_temp_data"
 
     id = Column(Integer, primary_key=True)
-    operation_id = Column(String, ForeignKey("pipeline_operations.operation_id"), nullable=False, index=True)
-    step = Column(String, nullable=False)  # MERGE_AUDIO, DIARIZATION и т.д.
-    data = Column(JSON, nullable=True)     # хранит промежуточный результат
-    status = Column(String, nullable=False, default="PENDING")  # NEW: PENDING/RUNNING/DONE/FAILED
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    operation = relationship("PipelineOperation")
+    operation_id = Column(
+        String,
+        ForeignKey("pipeline_operations.operation_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
 
+    step = Column(String, nullable=False)
+    data = Column(JSON, nullable=True)
 
-class PipelineOperation(Base):
-    __tablename__ = "pipeline_operations"
+    status = Column(String, nullable=False, default="PENDING")
 
-    id = Column(Integer, primary_key=True, index=True)
-    operation_id = Column(String, unique=True, index=True, nullable=False)
-    status = Column(String, default="PENDING")  # PENDING, RUNNING, DONE, FAILED
-    step = Column(String, nullable=True)         # текущий шаг пайплайна
-    progress = Column(Integer, default=0)        # 0-100
-    result_url = Column(String, nullable=True)   # presigned URL JSON
-    data = Column(JSON, nullable=True)           # дополнительная информация
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
-    task_id = Column(String, nullable=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    operation = relationship("PipelineOperation", back_populates="temp_data")
 
 
 class PipelineSegment(Base):
     __tablename__ = "pipeline_segments"
 
-    id = Column(Integer, primary_key=True, index=True)
-    operation_id = Column(String, ForeignKey("pipeline_operations.operation_id"), nullable=False)
-    start = Column(Numeric(10, 3))  # миллисекунды
-    end = Column(Numeric(10, 3))
+    id = Column(Integer, primary_key=True)
+
+    operation_id = Column(
+        String,
+        ForeignKey("pipeline_operations.operation_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    start = Column(Numeric(10, 3), nullable=False)
+    end = Column(Numeric(10, 3), nullable=False)
+
     id_speaker = Column(Integer, nullable=False)
     speaker = Column(String, nullable=False)
+
     transcription = Column(String, nullable=False)
-    file_name = Column(String, nullable=True)  # путь к wav/mp3, если нужно
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    file_name = Column(String, nullable=True)
+
+    created_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
 
     operation = relationship("PipelineOperation", back_populates="segments")
 
 
-PipelineOperation.segments = relationship("PipelineSegment", back_populates="operation", cascade="all, delete-orphan")
+# ============================================================
+# Meetings
+# ============================================================
 
 
-
-# -------------------
-# Models
-# -------------------
 class Meeting(Base):
     __tablename__ = "meetings"
-    __table_args__ = {"schema": "public"}
+
 
     id = Column(String, primary_key=True)
     name = Column(String, unique=True, nullable=False)
+
     start_time = Column(DateTime, nullable=False)
-    end_time = Column(DateTime)
-    status = Column(String, nullable=False)  # running | ended
+    end_time = Column(DateTime, nullable=True)
 
-    microphones = relationship("MeetingMicrophone", back_populates="meeting")
+    status = Column(String, nullable=False)
 
-    pipeline_id = Column(String, ForeignKey("pipeline_operations.operation_id"), nullable=True)
+    pipeline_id = Column(
+        String,
+        ForeignKey("pipeline_operations.operation_id"),
+        nullable=True,
+    )
+
     pipeline = relationship("PipelineOperation")
+    microphones = relationship(
+        "MeetingMicrophone",
+        back_populates="meeting",
+        cascade="all, delete-orphan",
+    )
 
 
 class MeetingMicrophone(Base):
     __tablename__ = "meeting_microphones"
-    __table_args__ = {"schema": "public"}
+    __table_args__ = (
+        UniqueConstraint(
+            "meeting_id",
+            "mic_number",
+            name="unique_mic_per_meeting",
+        ),
+    )
 
     id = Column(String, primary_key=True)
-    meeting_id = Column(String, ForeignKey("public.meetings.id"))
+
+    meeting_id = Column(
+        String,
+        ForeignKey("meetings.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
     mic_number = Column(Integer, nullable=False)
     role = Column(String, nullable=False)
 
     meeting = relationship("Meeting", back_populates="microphones")
 
 
+# ============================================================
+# Create tables
+# ============================================================
 
-Base.metadata.create_all(bind=engine)
+# В продакшене НЕ использовать!
+# Использовать Alembic.
+
 
 
 

@@ -21,7 +21,7 @@ CALC_METRICS = True
 RANDOM_SEED = 42
 
 # =====================
-# WARNINGS & TORCH
+# WARNINGS & TORCH SETTINGS
 # =====================
 
 warnings.filterwarnings(
@@ -41,15 +41,17 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 for path in [PATH_TO_AUDIO, RESULTS_PATH, TMP_PATH, METRICS_PATH]:
     path.mkdir(parents=True, exist_ok=True)
 
-if CALC_METRICS and next(METRICS_PATH.glob("*.xlsx"), None) is None:
-    print(f"[WARNING] В директории {METRICS_PATH} нет .xlsx файлов разметки")
+# Проверка наличия разметки, если нужно вычислять метрики
+if CALC_METRICS and not any(METRICS_PATH.glob("*.xlsx")):
+    warnings.warn(f"В директории {METRICS_PATH} нет .xlsx файлов разметки. METRICS отключены.")
     CALC_METRICS = False
 
 # =====================
-# SEED
+# SEED INITIALIZATION
 # =====================
 
 def set_global_seed(seed: int) -> None:
+    """Устанавливает глобальный seed для reproducibility."""
     os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
     np.random.seed(seed)
@@ -59,7 +61,4 @@ def set_global_seed(seed: int) -> None:
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
 
-
 set_global_seed(RANDOM_SEED)
-
-print(f"Device: {DEVICE}")

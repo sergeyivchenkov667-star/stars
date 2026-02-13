@@ -1,7 +1,6 @@
 # app/pipeline/steps/runner.py
 from celery import chain
 from sqlalchemy.orm import Session
-from app.pipeline.steps.bd import SessionLocal
 from app.pipeline.steps.pipeline_tasks import (
     merge_audio_task,
     diarization_task,

@@ -31,10 +31,6 @@ def vad_hungarian_step(intervals: List[Interval], merged_audio_path: Path, wav_f
     # ✅ если временный файл есть — загружаем его
     if step_tmp_path.exists():
         print(f"[VAD+Hungarian] Загружаем сохраненные интервалы {step_tmp_path}")
-        # with open(step_tmp_path, "r") as f:
-        #     data = json.load(f)
-        # updated_intervals = [tuple(item) for item in data["intervals"]]
-        # speaker_to_label = data["speaker_to_label"]
         return step_tmp_path
 
     random.seed(42)

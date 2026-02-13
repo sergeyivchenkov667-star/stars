@@ -1,8 +1,10 @@
 from logging.config import fileConfig
 
 from sqlalchemy import pool, create_engine
-from app.api.prod import settings, Base
+from app.pipeline.steps.bd import Base, Settings
 from alembic import context
+
+settings = Settings()
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

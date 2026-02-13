@@ -1,11 +1,19 @@
-from copy import deepcopy
 from pathlib import Path
+import hashlib
+import logging
 from typing import List, Dict, Any, Optional
 import json
-from app.pipeline.progress.export_pipeline_results import wav_to_mp3, secs_int, convert_intervals_to_target_json_s3, save_intervals_to_docx, save_intervals_to_json
-from app.storage.s3 import upload_mp3_to_s3, upload_json_to_s3, generate_presigned_url, s3_object_exists
-from app.pipeline.steps.bd import SessionLocal, PipelineSegment
+from requests.exceptions import Timeout, ConnectionError
+from app.pipeline.progress.export_pipeline_results import wav_to_mp3, convert_intervals_to_target_json_s3, save_intervals_to_docx
+from app.storage.s3 import upload_mp3_to_s3, upload_json_to_s3, s3_object_exists, upload_file_to_s3, get_s3_object_md5
+from app.pipeline.steps.bd import PipelineSegment
+from sqlalchemy.orm import Session
 
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)s | %(message)s'
+)
 
 def file_checksum(path: Path) -> str:
     """Возвращает md5 хеш файла для идемпотентной проверки"""
@@ -19,34 +27,53 @@ def file_checksum(path: Path) -> str:
 def safe_upload_to_s3(file_path: Path, s3_key: str):
     """Идемпотентная загрузка: пропускаем, если объект существует и checksum совпадает"""
     if s3_object_exists(s3_key):
-        # тут можно добавить проверку md5 через metadata, если bucket поддерживает
-        print(f"[S3] {s3_key} уже существует, пропускаем upload")
-        return
-    upload_mp3_to_s3(file_path, s3_key)
-    print(f"[S3] {s3_key} загружен")
+        remote_md5 = get_s3_object_md5(s3_key)
+        local_md5 = file_checksum(file_path)
+        if remote_md5 == local_md5:
+            logger.info(f"[S3] {s3_key} уже существует и md5 совпадает, пропускаем upload")
+            return
+        else:
+            logger.warning(f"[S3] {s3_key} существует, но md5 не совпадает, перезаписываем")
+    try:
+        upload_mp3_to_s3(file_path, s3_key)
+        print(f"[S3] {s3_key} загружен")
+    except (Timeout, ConnectionError) as e:
+        print(f"[S3] {s3_key} временная ошибка: {e}")
+        raise
 
 
 def safe_upload_file_to_s3(file_path: Path, s3_key: str):
     """Идемпотентная загрузка любых файлов (JSON, DOCX, MP3)"""
     if s3_object_exists(s3_key):
-        print(f"[S3] {s3_key} уже существует, пропускаем upload")
-        return
-    # Используем generic upload вместо mp3-specific
-    upload_json_to_s3(file_path, s3_key)
-    print(f"[S3] {s3_key} загружен")
+        if s3_object_exists(s3_key):
+            remote_md5 = get_s3_object_md5(s3_key)
+            local_md5 = file_checksum(file_path)
+            if remote_md5 == local_md5:
+                logger.info(f"[S3] {s3_key} уже существует и md5 совпадает, пропускаем upload")
+                return
+            else:
+                logger.warning(f"[S3] {s3_key} существует, но md5 не совпадает, перезаписываем")
+    try:
+        upload_json_to_s3(file_path, s3_key)
+        print(f"[S3] {s3_key} загружен")
+    except (Timeout, ConnectionError) as e:
+        print(f"[S3] {s3_key} временная ошибка: {e}")
+        raise
+
+
 
 
 def export_pipeline_results(
         *,
+        db: Session,
         intervals_with_text: List[Dict[str, Any]],
         speaker_to_label: Dict[str, str],
         speaker_to_file: Dict[str, str],
         label_to_file: Optional[Dict[str, str]],
         merged_audio_path: Path,
         s3_prefix: str = "segments",
-        presigned_expire: int = 3600,
         results_path_op: Path,
-        operation_id: Optional[str]
+        operation_id: str
 ) -> Dict[str, Any]:
     """
     Полностью идемпотентный финальный шаг пайплайна:
@@ -81,7 +108,6 @@ def export_pipeline_results(
         speaker_to_file=speaker_to_file,
         label_to_file=label_to_file,
         s3_prefix=s3_prefix,
-        presigned_expire=presigned_expire
     )
 
     # 4️⃣ JSON локально атомарно
@@ -94,7 +120,6 @@ def export_pipeline_results(
     # 5️⃣ JSON на S3 идемпотентно
     json_s3_key = f"{s3_prefix}/pipeline_intervals.json"
     safe_upload_file_to_s3(target_json, json_s3_key)
-    json_presigned_url = generate_presigned_url(json_s3_key, expires_in=presigned_expire)
 
 
     # 6️⃣ DOCX атомарно
@@ -102,6 +127,9 @@ def export_pipeline_results(
     tmp_docx = docx_path.with_name(docx_path.name + ".tmp")
     save_intervals_to_docx(intervals_with_text, tmp_docx)
     tmp_docx.rename(docx_path)
+
+    docx_s3_key = f"{s3_prefix}/pipeline_result.docx"
+    upload_file_to_s3(docx_path, docx_s3_key)
 
     # 7️⃣ Merged audio MP3
     merged_mp3_path = results_path_op / "Merged.mp3"
@@ -111,25 +139,21 @@ def export_pipeline_results(
         safe_upload_to_s3(merged_mp3_path, s3_key_merged)
 
     # 8️⃣ Сохраняем сегменты в БД (идемпотентно через delete+insert)
-    session = SessionLocal()
-    try:
-        session.query(PipelineSegment).filter_by(operation_id=operation_id).delete()
-        for it in target_json:
-            segment = PipelineSegment(
-                operation_id=operation_id,
-                file_name=it.get("file_url"),
-                id_speaker=int(it["id_speaker"]),
-                start=it["start"],
-                end=it["end"],
-                speaker=it["speaker"],
-                transcription=it["transcription"],
-            )
-            session.add(segment)
-        session.commit()
-    finally:
-        session.close()
+    db.query(PipelineSegment).filter_by(operation_id=operation_id).delete()
+    for it in target_json:
+        segment = PipelineSegment(
+            operation_id=operation_id,
+            file_name=it.get("file_url"),
+            id_speaker=int(it["id_speaker"]),
+            start=it["start"],
+            end=it["end"],
+            speaker=it["speaker"],
+            transcription=it["transcription"],
+        )
+        db.add(segment)
+    db.commit()
 
     return {
-        "json_url": json_presigned_url,
-        "json_s3_key": json_s3_key
+        "json_s3_key": json_s3_key,
+        "docx_s3_key": docx_s3_key,
     }

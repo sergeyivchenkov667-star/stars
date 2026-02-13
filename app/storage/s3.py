@@ -20,7 +20,11 @@ s3_client = boto3.client(
     aws_access_key_id=S3_ACCESS_KEY,
     aws_secret_access_key=S3_SECRET_KEY,
     region_name=S3_REGION,
-    config=Config(signature_version="s3v4"),
+    config=Config(
+        signature_version="s3v4",
+        connect_timeout=10,  # время подключения
+        read_timeout=30,
+    ),
 )
 
 def generate_presigned_url(key: str, expires_in: int = 3600) -> str:
@@ -29,6 +33,26 @@ def generate_presigned_url(key: str, expires_in: int = 3600) -> str:
         Params={"Bucket": S3_BUCKET, "Key": key},
         ExpiresIn=expires_in,
     )
+
+
+def get_s3_object_md5(s3_key: str, bucket: str) -> str | None:
+    """
+    Возвращает md5 (ETag) файла на S3.
+    Если объект не найден, возвращает None.
+    """
+    try:
+        response = s3_client.head_object(Bucket=bucket, Key=s3_key)
+        etag = response.get("ETag", "").strip('"')
+        # если файл был загружен multipart upload, ETag != md5, возвращаем None
+        if "-" in etag:
+            return None
+        return etag
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "404":
+            return None
+        raise
+
+
 
 def upload_wav_to_s3(
     wave: torch.Tensor,
@@ -68,13 +92,14 @@ def upload_mp3_to_s3(local_path: Path, s3_key: str):
             Filename=str(local_path),
             Bucket=S3_BUCKET,
             Key=s3_key,
-            ExtraArgs={"ContentType": "audio/mpeg"}
+            ExtraArgs={"ContentType": "audio/mpeg"},
         )
 
 
 def upload_json_to_s3(
     data: Dict[str, Any],
     s3_key: str,
+    timeout: int = 60
 ) -> None:
     s3_client.put_object(
         Bucket=S3_BUCKET,
@@ -84,7 +109,7 @@ def upload_json_to_s3(
     )
 
 
-def s3_object_exists(s3_key: str, bucket_name: str = "your-bucket") -> bool:
+def s3_object_exists(s3_key: str, bucket_name: str = S3_BUCKET) -> bool:
     """
     Проверяет, существует ли объект в S3.
 
@@ -104,3 +129,11 @@ def s3_object_exists(s3_key: str, bucket_name: str = "your-bucket") -> bool:
             return False
         # Любая другая ошибка — пробрасываем
         raise
+
+
+def upload_file_to_s3(file_path: Path, s3_key: str):
+    s3_client.upload_file(
+        Filename=str(file_path),
+        Bucket=S3_BUCKET,
+        Key=s3_key
+    )
